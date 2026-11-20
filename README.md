@@ -1,6 +1,6 @@
 # Pipeline ETL en AWS para datos de un adquirente de pagos
 
-Proyecto personal de ingeniería de datos. Toma datos transaccionales **simulados** de un adquirente de pagos (comercios, terminales, transacciones, liquidaciones), los extrae desde PostgreSQL, los deja en un data lake en Amazon S3 en formato Parquet, los cataloga en AWS Glue y los consulta con Amazon Athena.
+Proyecto personal de ingeniería de datos. Toma datos transaccionales **simulados** de un adquirente de pagos (comercios, terminales, transacciones, liquidaciones), los extrae desde PostgreSQL, los deja en un data lake en Amazon S3 en formato Parquet, los cataloga en AWS Glue, los consulta con Amazon Athena y ejecuta validaciones de calidad de datos.
 
 > Todos los datos son generados por un script. No hay información real de personas ni de empresas.
 
@@ -11,6 +11,7 @@ flowchart LR
     A[("PostgreSQL<br/>adquirente_dw")] -->|"extraer_a_s3.py<br/>Parquet + validación de conteos"| B["Amazon S3<br/>capa raw"]
     B -->|"crear_tablas_catalogo.py"| C["AWS Glue<br/>Data Catalog"]
     C --> D["Amazon Athena<br/>consultas SQL"]
+    D -->|"calidad_datos.py<br/>7 reglas + reporte JSON"| E["S3 meta/calidad"]
 ```
 
 ## Estado del proyecto
@@ -21,9 +22,9 @@ flowchart LR
 | Extracción a S3 en Parquet, con validación de conteos origen vs destino | Listo |
 | Catálogo de datos en AWS Glue Data Catalog (12 tablas, particiones) | Listo |
 | Consultas analíticas en Amazon Athena | Listo |
-| Transformaciones con AWS Glue (PySpark) hacia una capa curated | En desarrollo |
-| Carga y modelo analítico en Amazon Redshift | En desarrollo |
-| Validaciones de calidad de datos (reglas y reporte) | En desarrollo |
+| Validaciones de calidad de datos (7 reglas, reporte en S3) | Listo |
+| Transformaciones con AWS Glue (PySpark) hacia una capa curated | Pendiente: jobs de Glue restringidos en mi cuenta nueva de AWS |
+| Carga y modelo analítico en Amazon Redshift | Pendiente: Redshift Serverless bloqueado por política de la organización de AWS |
 | Dashboard de indicadores | En desarrollo |
 
 ## Datos de origen
@@ -34,7 +35,7 @@ Base `adquirente_dw` con 12 tablas relacionadas: `comercios`, `sucursales`, `ter
 - 120.000 transacciones entre enero y noviembre de 2026, con una tasa de aprobación cercana al 92 %.
 - 80.402 lotes de cierre y 15.444 liquidaciones que cuadran con las transacciones (bruto, comisión y neto).
 - Incluye casos realistas: transacciones aún sin liquidar, terminales en bodega y contracargos.
-- El generador **inyecta a propósito 58 inconsistencias** (30 liquidaciones donde el neto no es bruto menos comisión, 20 transacciones aprobadas sin código de autorización y 8 lotes con monto incorrecto). La etapa de calidad de datos debe detectarlas.
+- El generador **inyecta a propósito 58 inconsistencias** (30 liquidaciones donde el neto no es bruto menos comisión, 20 transacciones aprobadas sin código de autorización y 8 lotes con monto incorrecto). La etapa de calidad de datos las detecta todas (ver más abajo).
 
 ## Cómo está organizado
 
@@ -44,6 +45,7 @@ src/generar_datos.py              genera y carga los datos simulados en PostgreS
 src/extraer_a_s3.py               PostgreSQL -> Parquet en S3 (particionado por año/mes)
 src/crear_tablas_catalogo.py      registra las tablas en el Glue Data Catalog
 src/consultar_athena.py           ejecuta consultas SQL en Athena
+src/calidad_datos.py              reglas de calidad de datos sobre Athena + reporte en S3
 ```
 
 ## Cómo ejecutarlo
@@ -64,6 +66,9 @@ python src/crear_tablas_catalogo.py --bucket <mi-bucket>
 
 # 4. Consultar con Athena
 python src/consultar_athena.py --bucket <mi-bucket>
+
+# 5. Validar la calidad de los datos
+python src/calidad_datos.py --bucket <mi-bucket> --detalle
 ```
 
 ## Decisiones técnicas
@@ -72,6 +77,7 @@ python src/consultar_athena.py --bucket <mi-bucket>
 - **Partición por año y mes** en `transacciones` (11 archivos), con rutas tipo `anio=2026/mes=03/`.
 - **Trazabilidad origen-destino.** Cada extracción compara las filas leídas en PostgreSQL con las escritas en Parquet y falla si no coinciden. Además guarda un manifiesto con los conteos en `meta/manifiestos/`.
 - **Catálogo sin crawler.** En mi cuenta nueva de AWS la creación de crawlers de Glue está restringida a nivel de cuenta, así que registro las tablas con la API del Data Catalog, leyendo el esquema real de los archivos Parquet. El resultado en Athena es el mismo.
+- **Calidad de datos como reglas SQL.** Cada regla es una consulta que devuelve las filas que la incumplen; el script compara los incumplimientos con lo esperado, guarda un reporte JSON en `meta/calidad/` y termina con error si algo no cuadra, para poder usarlo dentro de un flujo automático.
 - **Scripts repetibles.** Se pueden ejecutar varias veces sin duplicar datos ni tablas.
 
 ## Ejemplo de resultado en Athena
@@ -95,12 +101,28 @@ anio  mes  transacciones  pct_aprobacion  monto_aprobado
 11 filas | datos escaneados: 469 KB
 ```
 
+## Ejemplo de reporte de calidad
+
+```
+                 regla  esperado  encontrados  estado
+    liq_neto_coherente        30           30      OK
+tx_aprobada_con_codigo        20           20      OK
+     lote_monto_cuadra         8            8      OK
+       tx_sin_terminal         0            0      OK
+     tx_monto_invalido         0            0      OK
+      tx_id_duplicado          0            0      OK
+tx_liquidada_inexistente       0            0      OK
+
+Total de registros con problemas: 58
+```
+
+Las tres primeras reglas detectan las 58 inconsistencias inyectadas (30 + 20 + 8); las otras cuatro verifican integridad referencial, montos válidos y ausencia de duplicados.
+
 ## Hoja de ruta
 
-1. Job de AWS Glue en PySpark que limpie y transforme los datos hacia una capa curated.
-2. Carga a Amazon Redshift y consultas analíticas sobre el modelo.
-3. Reglas de calidad de datos que detecten las inconsistencias inyectadas y generen un reporte.
-4. Dashboard de indicadores (aprobación, montos, comisiones, contracargos).
+1. Dashboard de indicadores (aprobación, montos, comisiones, contracargos).
+2. Job de AWS Glue en PySpark hacia una capa curated, cuando la cuenta permita ejecutar jobs.
+3. Carga a Amazon Redshift y modelo analítico, cuando la cuenta lo permita.
 
 ## Tecnologías
 
