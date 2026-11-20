@@ -1,6 +1,8 @@
 # Pipeline ETL en AWS para datos de un adquirente de pagos
 
-Proyecto personal de ingeniería de datos. Toma datos transaccionales **simulados** de un adquirente de pagos (comercios, terminales, transacciones, liquidaciones), los extrae desde PostgreSQL, los deja en un data lake en Amazon S3 en formato Parquet, los cataloga en AWS Glue, los consulta con Amazon Athena y ejecuta validaciones de calidad de datos.
+Proyecto personal de ingeniería de datos. Toma datos transaccionales **simulados** de un adquirente de pagos (comercios, terminales, transacciones, liquidaciones), los extrae desde PostgreSQL, los deja en un data lake en Amazon S3 en formato Parquet, los cataloga en AWS Glue, los consulta con Amazon Athena y ejecuta validaciones de calidad de datos y publica un dashboard de indicadores.
+
+**Dashboard en vivo:** https://leandrodlf.github.io/pipeline-etl-aws-adquirente/dashboard/
 
 > Todos los datos son generados por un script. No hay información real de personas ni de empresas.
 
@@ -12,6 +14,7 @@ flowchart LR
     B -->|"crear_tablas_catalogo.py"| C["AWS Glue<br/>Data Catalog"]
     C --> D["Amazon Athena<br/>consultas SQL"]
     D -->|"calidad_datos.py<br/>7 reglas + reporte JSON"| E["S3 meta/calidad"]
+    D -->|"generar_dashboard.py"| F["Dashboard HTML<br/>GitHub Pages"]
 ```
 
 ## Estado del proyecto
@@ -25,7 +28,7 @@ flowchart LR
 | Validaciones de calidad de datos (7 reglas, reporte en S3) | Listo |
 | Transformaciones con AWS Glue (PySpark) hacia una capa curated | Pendiente: jobs de Glue restringidos en mi cuenta nueva de AWS |
 | Carga y modelo analítico en Amazon Redshift | Pendiente: Redshift Serverless bloqueado por política de la organización de AWS |
-| Dashboard de indicadores | En desarrollo |
+| Dashboard de indicadores publicado en GitHub Pages | Listo |
 
 ## Datos de origen
 
@@ -46,6 +49,8 @@ src/extraer_a_s3.py               PostgreSQL -> Parquet en S3 (particionado por 
 src/crear_tablas_catalogo.py      registra las tablas en el Glue Data Catalog
 src/consultar_athena.py           ejecuta consultas SQL en Athena
 src/calidad_datos.py              reglas de calidad de datos sobre Athena + reporte en S3
+src/generar_dashboard.py          genera dashboard/index.html con indicadores desde Athena
+dashboard/index.html              dashboard estático (publicado con GitHub Pages)
 ```
 
 ## Cómo ejecutarlo
@@ -69,6 +74,9 @@ python src/consultar_athena.py --bucket <mi-bucket>
 
 # 5. Validar la calidad de los datos
 python src/calidad_datos.py --bucket <mi-bucket> --detalle
+
+# 6. Generar el dashboard (queda en dashboard/index.html)
+python src/generar_dashboard.py --bucket <mi-bucket>
 ```
 
 ## Decisiones técnicas
@@ -120,13 +128,12 @@ Las tres primeras reglas detectan las 58 inconsistencias inyectadas (30 + 20 + 8
 
 ## Hoja de ruta
 
-1. Dashboard de indicadores (aprobación, montos, comisiones, contracargos).
-2. Job de AWS Glue en PySpark hacia una capa curated, cuando la cuenta permita ejecutar jobs.
-3. Carga a Amazon Redshift y modelo analítico, cuando la cuenta lo permita.
+1. Job de AWS Glue en PySpark hacia una capa curated, cuando la cuenta permita ejecutar jobs.
+2. Carga a Amazon Redshift y modelo analítico, cuando la cuenta lo permita.
 
 ## Tecnologías
 
-Python, SQL, PostgreSQL, Docker, Amazon S3, AWS Glue, Amazon Athena, Parquet y Git.
+Python, SQL, PostgreSQL, Docker, Amazon S3, AWS Glue, Amazon Athena, Parquet, HTML/SVG/JavaScript (dashboard), GitHub Pages y Git.
 
 ## Autor
 
