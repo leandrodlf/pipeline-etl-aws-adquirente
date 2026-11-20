@@ -202,7 +202,7 @@ def generar(a):
     mask = t_s.notna().values
     com_de_term[terminales["id"].values[mask]] = suc_com_de[t_s[mask].astype(int).values].values
     tx["comercio_id"] = com_de_term[tx["terminal_id"].values]
-    wd = tx["fecha"].dt.weekday.values
+    wd = tx["fecha"].dt.day_of_week.values
     suma = (4 - wd) % 7
     suma = np.where(suma == 0, 7, suma)
     tx["fecha_pago"] = tx["fecha"] + pd.to_timedelta(suma, unit="D")
